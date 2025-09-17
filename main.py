@@ -44,6 +44,17 @@ def draw_landmarks(frame: np.ndarray, hand_landmarks, handedness: str | None) ->
         h_x, h_y = int(h_wrist.x * frame.shape[1]), int(h_wrist.y * frame.shape[0])
         cv2.putText(frame, h_label, (h_x + 10, h_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
 
+    # annotate fingertip pixel coordinates (x,y) based on current frame resolution
+    tip_indices = [4, 8, 12, 16, 20]
+    img_h, img_w = frame.shape[0], frame.shape[1]
+    for idx in tip_indices:
+        lm = hand_landmarks.landmark[idx]
+        x_px, y_px = int(lm.x * img_w), int(lm.y * img_h)
+        # offset text slightly so it does not overlap the landmark dot
+        text_pos = (x_px + 6, y_px - 6)
+        label = f"{x_px},{y_px}"
+        cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 200, 255), 2, cv2.LINE_AA)
+
 
 def count_raised_fingers(landmarks: List[Tuple[float, float, float]], image_width: int, image_height: int) -> int:
     if not landmarks:
