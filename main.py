@@ -87,6 +87,30 @@ def count_raised_fingers(landmarks: List[Tuple[float, float, float]], image_widt
     return int(np.clip(raised, 0, 5))
 
 
+def compute_pinch(
+    landmarks: List[Tuple[float, float, float]], image_width: int, image_height: int
+) -> Tuple[bool, Tuple[int, int]]:
+    """Return (is_pinch, (cx, cy)) using thumb tip (4) and index tip (8).
+
+    A pinch is detected when the pixel distance between tips is below a
+    dynamic threshold relative to current frame size.
+    """
+    if not landmarks:
+        return False, (0, 0)
+
+    def to_px(idx: int) -> Tuple[int, int]:
+        lm = landmarks[idx]
+        return int(lm[0] * image_width), int(lm[1] * image_height)
+
+    thumb_x, thumb_y = to_px(4)
+    index_x, index_y = to_px(8)
+    dist = float(np.hypot(thumb_x - index_x, thumb_y - index_y))
+    threshold = max(0.06 * min(image_width, image_height), 24.0)
+    is_pinch = dist < threshold
+    cx, cy = int((thumb_x + index_x) * 0.5), int((thumb_y + index_y) * 0.5)
+    return is_pinch, (cx, cy)
+
+
 def main() -> None:
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -106,6 +130,11 @@ def main() -> None:
     print("Press 'q' to quit, 's' to save a snapshot.")
     recent_counts = deque(maxlen=7)
     last_saved = 0.0
+    # draggable ball state
+    ball_center: Tuple[int, int] | None = None
+    ball_radius: int = 24
+    dragging: bool = False
+    drag_offset: Tuple[int, int] = (0, 0)
 
     while True:
         ok, frame = cap.read()
@@ -116,7 +145,13 @@ def main() -> None:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = hands.process(rgb)
 
+        # initialize ball in the center once we know the frame size
+        if ball_center is None:
+            h, w = frame.shape[0], frame.shape[1]
+            ball_center = (w // 2, h // 2)
+
         total_raised = 0
+        pinch_centers: List[Tuple[int, int]] = []
         if results.multi_hand_landmarks:
             for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
                 draw_landmarks(frame, hand_landmarks, None)
@@ -124,9 +159,54 @@ def main() -> None:
                 total_raised += count_raised_fingers(
                     lm_list, frame.shape[1], frame.shape[0]
                 )
+                is_pinch, pinch_xy = compute_pinch(
+                    lm_list, frame.shape[1], frame.shape[0]
+                )
+                if is_pinch:
+                    pinch_centers.append(pinch_xy)
 
         recent_counts.append(total_raised)
         display_count = Counter(recent_counts).most_common(1)[0][0] if recent_counts else 0
+
+        # update draggable ball based on pinch
+        if ball_center is not None:
+            h, w = frame.shape[0], frame.shape[1]
+            grab_radius = ball_radius + 32
+
+            def clamp_to_bounds(x: int, y: int) -> Tuple[int, int]:
+                return (
+                    int(np.clip(x, ball_radius, w - ball_radius - 1)),
+                    int(np.clip(y, ball_radius, h - ball_radius - 1)),
+                )
+
+            if dragging:
+                if pinch_centers:
+                    # follow the nearest pinch to the current ball center
+                    px, py = min(
+                        pinch_centers,
+                        key=lambda p: (p[0] - ball_center[0]) ** 2 + (p[1] - ball_center[1]) ** 2,
+                    )
+                    new_x = px + drag_offset[0]
+                    new_y = py + drag_offset[1]
+                    ball_center = clamp_to_bounds(new_x, new_y)
+                else:
+                    dragging = False
+            else:
+                if pinch_centers:
+                    # can start dragging only if pinching near the ball
+                    px, py = min(
+                        pinch_centers,
+                        key=lambda p: (p[0] - ball_center[0]) ** 2 + (p[1] - ball_center[1]) ** 2,
+                    )
+                    dist2 = (px - ball_center[0]) ** 2 + (py - ball_center[1]) ** 2
+                    if dist2 <= grab_radius * grab_radius:
+                        dragging = True
+                        drag_offset = (ball_center[0] - px, ball_center[1] - py)
+
+            # draw the ball
+            color = (0, 220, 80) if dragging else (0, 165, 255)
+            cv2.circle(frame, ball_center, ball_radius, color, -1)
+            cv2.circle(frame, ball_center, ball_radius, (30, 30, 30), 2)
 
         cv2.putText(frame, f"Raised Fingers: {display_count}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50, 255, 50), 3, cv2.LINE_AA)
         cv2.imshow("Hand Pose", frame)

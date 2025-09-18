@@ -38,3 +38,4 @@ fi
 "$PY" -m pip install -r requirements.txt --no-input
 
 exec "$PY" main.py
+#exec "$PY" main_test.py
